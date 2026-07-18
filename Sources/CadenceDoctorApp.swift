@@ -384,7 +384,7 @@ final class AppModel: ObservableObject {
     }
 
     func logEvent(_ line: String) {
-        if echoLog { print(line); FileHandle.standardOutput.synchronizeFile() }
+        if echoLog { print(line); fflush(stdout) }
         guard let p = logPath else { return }
         let data = (line + "\n").data(using: .utf8)!
         if let h = FileHandle(forWritingAtPath: p) {
