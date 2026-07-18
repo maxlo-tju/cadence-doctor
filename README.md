@@ -37,9 +37,10 @@ cut in.
 
 ## Requirements
 
-- Homebrew ffmpeg/ffprobe (`brew install ffmpeg`) — looked up in
-  /opt/homebrew/bin, /usr/local/bin, /opt/local/bin.
-- macOS 13+.
+- macOS 14+ (Apple Silicon or Intel).
+- Nothing else: universal ffmpeg/ffprobe are bundled in the app. (If the
+  bundled copies are removed, the app falls back to /opt/homebrew/bin,
+  /usr/local/bin, /opt/local/bin.)
 
 ## Usage
 

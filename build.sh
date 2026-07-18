@@ -7,12 +7,12 @@ APP="Cadence Doctor.app"
 mkdir -p build
 echo "Compiling arm64…"
 swiftc -O -swift-version 5 -parse-as-library \
-    -target arm64-apple-macosx13.0 \
+    -target arm64-apple-macosx14.0 \
     Sources/CadenceDoctorApp.swift \
     -o build/CadenceDoctor-arm64
 echo "Compiling x86_64…"
 swiftc -O -swift-version 5 -parse-as-library \
-    -target x86_64-apple-macosx13.0 \
+    -target x86_64-apple-macosx14.0 \
     Sources/CadenceDoctorApp.swift \
     -o build/CadenceDoctor-x86_64
 lipo -create build/CadenceDoctor-arm64 build/CadenceDoctor-x86_64 \
