@@ -42,6 +42,15 @@ struct CadenceResult {
     var note = ""
 
     init(kind: Kind) { self.kind = kind }
+
+    var kindLabel: String {
+        switch kind {
+        case .clean: return "clean"
+        case .skip: return "skip"
+        case .dupBlend: return "dupblend"
+        case .irregular: return "irregular"
+        }
+    }
 }
 
 enum CadenceAnalyzer {
@@ -357,6 +366,43 @@ final class AppModel: ObservableObject {
     private var scansActive = 0
     private var scanWaitQueue: [UUID] = []
 
+    // Headless/batch hooks: CADENCE_OUTDIR overrides the output folder,
+    // CADENCE_AUTOREPAIR=1 repairs every repairable clip after scanning,
+    // CADENCE_LOG=<path> appends tab-separated scan/repair events.
+    private let autoRepair: Bool
+    private let logPath: String?
+    var echoLog = false
+
+    init() {
+        let env = ProcessInfo.processInfo.environment
+        autoRepair = env["CADENCE_AUTOREPAIR"] == "1"
+        logPath = env["CADENCE_LOG"]
+        if let d = env["CADENCE_OUTDIR"], !d.isEmpty {
+            outputDir = URL(fileURLWithPath: d, isDirectory: true)
+        }
+        logEvent("LAUNCH\tautoRepair=\(autoRepair)\tffmpeg=\(FF.ffmpeg ?? "MISSING")")
+    }
+
+    func logEvent(_ line: String) {
+        if echoLog { print(line); FileHandle.standardOutput.synchronizeFile() }
+        guard let p = logPath else { return }
+        let data = (line + "\n").data(using: .utf8)!
+        if let h = FileHandle(forWritingAtPath: p) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: p))
+        }
+    }
+
+    var allJobsSettled: Bool {
+        !jobs.isEmpty && jobs.allSatisfy {
+            switch $0.state {
+            case .analyzed, .fixed, .failed: return true
+            default: return false
+            }
+        }
+    }
+
     static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mxf", "avi", "mkv"]
 
     // MARK: intake
@@ -380,6 +426,7 @@ final class AppModel: ObservableObject {
             }
         }
         let existing = Set(jobs.map { $0.url.path })
+        logEvent("ADD\t\(files.count) file(s)")
         for f in files.sorted(by: { $0.path < $1.path }) where !existing.contains(f.path) {
             let job = ClipJob(url: f)
             jobs.append(job)
@@ -419,6 +466,7 @@ final class AppModel: ObservableObject {
     private func scan(_ id: UUID) async {
         defer { scanFinished() }
         guard let j = job(id) else { return }
+        logEvent("SCANSTART\t\(j.url.lastPathComponent)")
         do {
             update(id) { $0.state = .probing }
             let info = try await MediaEngine.probe(j.url.path)
@@ -446,9 +494,14 @@ final class AppModel: ObservableObject {
                 $0.state = .analyzed
                 if $0.info?.frames == 0 { $0.info?.frames = diffs.count + 1 }
             }
+            logEvent("SCAN\t\(j.url.lastPathComponent)\tkind=\(result.kindLabel)\tperiod=\(result.period)\tphase=\(result.phase)\tspikes=\(result.spikes)\tdips=\(result.dips)\tperiodicity=\(String(format: "%.2f", result.periodicity))")
+            if autoRepair && job(id)?.isRepairable == true {
+                enqueueRepair([id])
+            }
         } catch {
             running[id] = nil
             update(id) { $0.state = .failed; $0.errorMessage = error.localizedDescription }
+            logEvent("SCANFAIL\t\(j.url.lastPathComponent)\t\(error.localizedDescription)")
         }
     }
 
@@ -560,8 +613,10 @@ final class AppModel: ObservableObject {
             v.outPath = outURL.path
             v.ok = abs(v.frames - expected) <= 3 && !v.residualPeriodic
             update(id) { $0.verify = v; $0.state = .fixed }
+            logEvent("FIXED\t\((outURL.lastPathComponent))\tframes=\(v.frames)\texpected=\(v.expected)\tresidualPeriodic=\(v.residualPeriodic)\tok=\(v.ok)")
         } catch {
             update(id) { $0.state = .failed; $0.errorMessage = "verify failed: \(error.localizedDescription)" }
+            logEvent("VERIFYFAIL\t\(outURL.lastPathComponent)\t\(error.localizedDescription)")
         }
     }
 
@@ -862,6 +917,13 @@ struct ContentView: View {
         .frame(minWidth: 940, minHeight: 580)
         .background(Palette.bg)
         .preferredColorScheme(.dark)
+        .onAppear {
+            // Accept file/folder paths passed on the command line.
+            let args = CommandLine.arguments.dropFirst()
+                .map { URL(fileURLWithPath: $0) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            if !args.isEmpty { model.addURLs(Array(args)) }
+        }
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted) { providers in
             for provider in providers {
                 provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
@@ -955,13 +1017,62 @@ struct ContentView: View {
 
 // MARK: - App
 
-@main
 struct CadenceDoctorApp: App {
     @StateObject private var model = AppModel()
     var body: some Scene {
         WindowGroup("Cadence Doctor") {
             ContentView()
                 .environmentObject(model)
+        }
+    }
+}
+
+// MARK: - Headless mode
+// `Cadence Doctor.app/Contents/MacOS/CadenceDoctor --cli <files...>` runs the
+// exact same scan/repair state machine with no window; results go to stdout
+// (and CADENCE_LOG if set). Exit 0 = all clips settled with no failures and
+// every repair verified.
+
+@MainActor
+enum Headless {
+    static func run() async -> Int32 {
+        let model = AppModel()
+        model.echoLog = true
+        let files = CommandLine.arguments.dropFirst()
+            .filter { $0 != "--cli" }
+            .map { URL(fileURLWithPath: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !files.isEmpty else {
+            print("usage: CadenceDoctor --cli <clip-or-folder>…  (env: CADENCE_AUTOREPAIR=1 CADENCE_OUTDIR=… CADENCE_LOG=…)")
+            return 2
+        }
+        model.addURLs(files)
+        while !model.allJobsSettled {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        var code: Int32 = 0
+        for j in model.jobs {
+            switch j.state {
+            case .failed: code = 1
+            case .fixed: if j.verify?.ok != true { code = 1 }
+            default: break
+            }
+        }
+        model.logEvent("DONE\texit=\(code)")
+        return code
+    }
+}
+
+@main
+enum Entry {
+    static func main() {
+        if CommandLine.arguments.contains("--cli") {
+            Task { @MainActor in
+                exit(await Headless.run())
+            }
+            dispatchMain()
+        } else {
+            CadenceDoctorApp.main()
         }
     }
 }

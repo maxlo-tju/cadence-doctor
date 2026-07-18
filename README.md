@@ -59,3 +59,16 @@ profile, and output folder in the header. Output files get a rate suffix
 
 Requires Xcode Command Line Tools. The app is ad-hoc signed; it runs locally
 but will need re-signing for distribution to other machines.
+
+## Headless / batch mode
+
+```
+"Cadence Doctor.app/Contents/MacOS/CadenceDoctor" --cli <clips-or-folders>…
+```
+
+Runs the same scan → repair → verify state machine without a window and exits
+0 only if every clip settled cleanly and every repair verified. Environment:
+`CADENCE_AUTOREPAIR=1` (repair everything repairable), `CADENCE_OUTDIR=<dir>`
+(output folder override), `CADENCE_LOG=<file>` (append tab-separated events:
+LAUNCH/ADD/SCANSTART/SCAN/FIXED/FAILED/DONE). Useful for render nodes and QC
+sweeps over whole turnover directories.
