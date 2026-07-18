@@ -37,7 +37,7 @@ cp build/CadenceDoctor "$APP/Contents/MacOS/CadenceDoctor"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# Embed ffmpeg/ffprobe + dylibs if vendored (run ./bundle_ffmpeg.sh to create)
+# Embed ffmpeg/ffprobe + dylibs if vendored (run ./bundle_ffmpeg_universal.sh to create)
 if [ -d vendor/Helpers ]; then
     mkdir -p "$APP/Contents/Helpers"
     cp -R vendor/Helpers/ "$APP/Contents/Helpers/"
